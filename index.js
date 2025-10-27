@@ -9,7 +9,6 @@ import ytdl from 'ytdl-core';
 import * as Jimp from 'jimp';
 import QRCode from 'qrcode';
 import fsExtra from 'fs-extra';
-import OpenAI from 'openai';
 
 // --- EXPRESS SERVER ---
 const app = express();
@@ -39,8 +38,31 @@ app.get("/qr", (req, res) => {
   }
 });
 
-// --- OPENAI GPT ---
-const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
+// --- IA BÁSICA OFFLINE ---
+const respuestasIA = [
+  { patrones: ['hola', 'buenas'], respuesta: '¡Hola @! 😎🔥' },
+  { patrones: ['gracias', 'muchas gracias'], respuesta: 'De nada @ 😉' },
+  { patrones: ['cómo estás', 'como estas'], respuesta: 'Estoy bien @, ¿y tú? 😁' },
+  { patrones: ['buenas noches'], respuesta: '¡Buenas noches @! 🌙✨' },
+  { patrones: ['adiós', 'nos vemos'], respuesta: 'Nos vemos @ 👋' }
+];
+
+function responderIA(text, from, participants){
+  text = text.toLowerCase();
+  for(const item of respuestasIA){
+    for(const pat of item.patrones){
+      if(text.includes(pat)){
+        if(participants && participants.length > 0){
+          const jid = participants.find(p => p.id === from)?.id || from;
+          return item.respuesta.replace('@', `@${jid.split('@')[0]}`);
+        } else {
+          return item.respuesta.replace('@', '');
+        }
+      }
+    }
+  }
+  return null;
+}
 
 // --- START BOT FULL ---
 async function startSock() {
@@ -64,7 +86,6 @@ async function startSock() {
     if(events['connection.update']){
       const { connection, lastDisconnect, qr } = events['connection.update'];
 
-      // --- NUEVO: GUARDAR QR ---
       if(qr){
         latestQR = await QRCode.toDataURL(qr);
         console.log('QR generado! Abre /qr en tu navegador para escanearlo.');
@@ -171,33 +192,14 @@ async function startSock() {
           }
         }
 
-        // IA
-        if(text.startsWith('#ai')){
-          try {
-            const prompt = text.replace('#ai','').trim();
-            const response = await openai.chat.completions.create({
-              model: "gpt-3.5-turbo",
-              messages: [{ role: "user", content: prompt }],
-            });
-            await sock.sendMessage(from, { text: response.choices[0].message.content });
-          } catch(e){
-            console.log('Error IA:', e);
-            await sock.sendMessage(from, { text: "Oops, bro 😅 algo falló con la IA." });
-          }
+        // --- RESPUESTAS IA BÁSICA ---
+        let participants = null;
+        if(from.endsWith('@g.us')){
+          const group = await sock.groupMetadata(from);
+          participants = group.participants;
         }
-
-        // RESPUESTAS BÁSICAS
-        if(text.includes('hola') || text.includes('buenas')){
-          await sock.sendMessage(from, { text: `Hola @${sender.split('@')[0]} 😎🔥`, mentions: [sender] });
-        }
-
-        if(text.includes('gracias')){
-          await sock.sendMessage(from, { text: `De nada bro @${sender.split('@')[0]} 😉`, mentions: [sender] });
-        }
-
-        if(text.includes('cómo estás') || text.includes('como estas')){
-          await sock.sendMessage(from, { text: `Todo bien bro 😎, y tú @${sender.split('@')[0]}?`, mentions: [sender] });
-        }
+        const respuesta = responderIA(text, from, participants);
+        if(respuesta) await sock.sendMessage(from, { text: respuesta });
 
         // Anti-link simple
         if(text.includes('link')){
