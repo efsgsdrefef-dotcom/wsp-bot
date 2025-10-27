@@ -9,6 +9,7 @@ import ytdl from 'ytdl-core';
 import * as Jimp from 'jimp';
 import QRCode from 'qrcode';
 import fsExtra from 'fs-extra';
+import OpenAI from 'openai';
 
 // --- EXPRESS SERVER ---
 const app = express();
@@ -38,6 +39,9 @@ app.get("/qr", (req, res) => {
   }
 });
 
+// --- OPENAI GPT ---
+const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
+
 // --- START BOT FULL ---
 async function startSock() {
   const { state, saveCreds } = await useMultiFileAuthState('session');
@@ -57,7 +61,7 @@ async function startSock() {
   });
 
   sock.ev.process(async (events) => {
-    if(events['connection.update']) {
+    if(events['connection.update']){
       const { connection, lastDisconnect, qr } = events['connection.update'];
 
       // --- NUEVO: GUARDAR QR ---
@@ -66,8 +70,8 @@ async function startSock() {
         console.log('QR generado! Abre /qr en tu navegador para escanearlo.');
       }
 
-      if(connection === 'close') {
-        if((lastDisconnect?.error?.output?.statusCode) !== DisconnectReason.loggedOut) {
+      if(connection === 'close'){
+        if((lastDisconnect?.error?.output?.statusCode) !== DisconnectReason.loggedOut){
           console.log('Reconectando...');
           startSock();
         } else {
@@ -78,94 +82,128 @@ async function startSock() {
 
     if(events['creds.update']) await saveCreds();
 
-    if(events['messages.upsert']) {
+    if(events['messages.upsert']){
       const upsert = events['messages.upsert'];
       for(const msg of upsert.messages){
-        if(msg.message?.conversation){
-          const text = msg.message.conversation.toLowerCase();
-          const from = msg.key.remoteJid;
+        const from = msg.key.remoteJid;
+        const sender = msg.key.participant || from;
+        const text = msg.message?.conversation?.toLowerCase()
+                     || msg.message?.extendedTextMessage?.text?.toLowerCase();
 
-          // --- COMANDOS ---
-          if(text.startsWith('#sticker')){
-            try {
+        if(!text) continue;
+
+        // --- COMANDOS ---
+
+        // STICKER desde URL o imagen enviada
+        if(text.startsWith('#sticker')){
+          try {
+            let buffer;
+            if(msg.message?.imageMessage){
+              const media = await sock.downloadMediaMessage({ message: { imageMessage: msg.message.imageMessage } });
+              buffer = Buffer.from(media);
+            } else {
               const mediaUrl = text.split(' ')[1];
               if(!mediaUrl) return await sock.sendMessage(from, { text: 'Debes enviar una URL de imagen.' });
               const image = await Jimp.read(mediaUrl);
-              const buffer = await image.getBufferAsync(Jimp.MIME_PNG);
-              await sock.sendMessage(from, { sticker: buffer });
-            } catch(e){ 
-              console.log('Error sticker:', e); 
-              await sock.sendMessage(from, { text: 'Error al crear sticker.' });
+              buffer = await image.getBufferAsync(Jimp.MIME_PNG);
             }
+            await sock.sendMessage(from, { sticker: buffer });
+          } catch(e){
+            console.log('Error sticker:', e);
+            await sock.sendMessage(from, { text: 'Error al crear sticker.' });
           }
-
-          if(text.startsWith('#ytaudio')){
-  try {
-    const query = text.replace('#ytaudio','').trim();
-    const r = await yts(query);
-    const video = r.videos.length > 0 ? r.videos[0] : null;
-    if(!video) return await sock.sendMessage(from, { text: 'No se encontró audio 😔' });
-
-    const filePath = `audio.mp3`;
-    const stream = ytdl(video.url, { filter: 'audioonly', highWaterMark: 1<<25 }); // buffer grande para no saturar
-    const writeStream = fs.createWriteStream(filePath);
-
-    // Manejo de errores en stream
-    stream.on('error', async (err) => {
-      console.log('Error en ytdl stream:', err);
-      await sock.sendMessage(from, { text: 'Error descargando el audio 😔' });
-      if(fs.existsSync(filePath)) fsExtra.removeSync(filePath);
-    });
-
-    // Timeout: si tarda más de 60s, cancelar
-    const timeout = setTimeout(() => {
-      stream.destroy();
-      if(fs.existsSync(filePath)) fsExtra.removeSync(filePath);
-      sock.sendMessage(from, { text: 'La descarga tardó demasiado y fue cancelada ⏱️' });
-    }, 60000);
-
-    stream.pipe(writeStream);
-    writeStream.on('finish', async ()=>{
-      clearTimeout(timeout);
-      try {
-        await sock.sendMessage(from, { audio: fs.readFileSync(filePath), mimetype: 'audio/mpeg' });
-      } catch(err){
-        console.log('Error enviando audio:', err);
-        await sock.sendMessage(from, { text: 'Error enviando audio 😔' });
-      } finally {
-        fsExtra.removeSync(filePath);
-      }
-    });
-
-  } catch(e){ 
-    console.log('Error #ytaudio:', e);
-    await sock.sendMessage(from, { text: 'Ocurrió un error descargando el audio 😔' });
-  }
-}
-
-
-          if(text.startsWith('#ytvideo')){
-            try {
-              const query = text.replace('#ytvideo','').trim();
-              const r = await yts(query);
-              const video = r.videos.length > 0 ? r.videos[0] : null;
-              if(!video) return await sock.sendMessage(from, { text: 'No se encontró video 😔' });
-              await sock.sendMessage(from, { text: `Video link: ${video.url}` });
-            } catch(e){ 
-              console.log('Error ytvideo:', e);
-              await sock.sendMessage(from, { text: 'Ocurrió un error buscando video 😔' });
-            }
-          }
-
-          if(text.includes('hola')){
-            await sock.sendMessage(from, { text: 'Hola bro 😎🔥' });
-          }
-
-          if(text.includes('link')){
-            await sock.sendMessage(from, { text: 'Anti-link activo 🚫' });
-          }
-
         }
+
+        // YTAUDIO seguro
+        if(text.startsWith('#ytaudio')){
+          try {
+            const query = text.replace('#ytaudio','').trim();
+            const r = await yts(query);
+            const video = r.videos.length > 0 ? r.videos[0] : null;
+            if(!video) return await sock.sendMessage(from, { text: 'No se encontró audio 😔' });
+
+            const filePath = `audio.mp3`;
+            const stream = ytdl(video.url, { filter: 'audioonly', highWaterMark: 1<<25 });
+            const writeStream = fs.createWriteStream(filePath);
+
+            const timeout = setTimeout(() => {
+              stream.destroy();
+              if(fs.existsSync(filePath)) fsExtra.removeSync(filePath);
+              sock.sendMessage(from, { text: 'La descarga tardó demasiado y fue cancelada ⏱️' });
+            }, 60000);
+
+            stream.on('error', async (err) => {
+              console.log('Error en ytdl stream:', err);
+              if(fs.existsSync(filePath)) fsExtra.removeSync(filePath);
+              await sock.sendMessage(from, { text: 'Error descargando el audio 😔' });
+            });
+
+            stream.pipe(writeStream);
+            writeStream.on('finish', async () => {
+              clearTimeout(timeout);
+              try {
+                await sock.sendMessage(from, { audio: fs.readFileSync(filePath), mimetype: 'audio/mpeg' });
+              } catch(err){
+                console.log('Error enviando audio:', err);
+                await sock.sendMessage(from, { text: 'Error enviando audio 😔' });
+              } finally {
+                fsExtra.removeSync(filePath);
+              }
+            });
+
+          } catch(e){
+            console.log('Error #ytaudio:', e);
+            await sock.sendMessage(from, { text: 'Ocurrió un error descargando el audio 😔' });
+          }
+        }
+
+        // YTVIDEO
+        if(text.startsWith('#ytvideo')){
+          try {
+            const query = text.replace('#ytvideo','').trim();
+            const r = await yts(query);
+            const video = r.videos.length > 0 ? r.videos[0] : null;
+            if(!video) return await sock.sendMessage(from, { text: 'No se encontró video 😔' });
+            await sock.sendMessage(from, { text: `Video link: ${video.url}` });
+          } catch(e){
+            console.log('Error ytvideo:', e);
+            await sock.sendMessage(from, { text: 'Ocurrió un error buscando video 😔' });
+          }
+        }
+
+        // IA
+        if(text.startsWith('#ai')){
+          try {
+            const prompt = text.replace('#ai','').trim();
+            const response = await openai.chat.completions.create({
+              model: "gpt-3.5-turbo",
+              messages: [{ role: "user", content: prompt }],
+            });
+            await sock.sendMessage(from, { text: response.choices[0].message.content });
+          } catch(e){
+            console.log('Error IA:', e);
+            await sock.sendMessage(from, { text: "Oops, bro 😅 algo falló con la IA." });
+          }
+        }
+
+        // RESPUESTAS BÁSICAS
+        if(text.includes('hola') || text.includes('buenas')){
+          await sock.sendMessage(from, { text: `Hola @${sender.split('@')[0]} 😎🔥`, mentions: [sender] });
+        }
+
+        if(text.includes('gracias')){
+          await sock.sendMessage(from, { text: `De nada bro @${sender.split('@')[0]} 😉`, mentions: [sender] });
+        }
+
+        if(text.includes('cómo estás') || text.includes('como estas')){
+          await sock.sendMessage(from, { text: `Todo bien bro 😎, y tú @${sender.split('@')[0]}?`, mentions: [sender] });
+        }
+
+        // Anti-link simple
+        if(text.includes('link')){
+          await sock.sendMessage(from, { text: 'Anti-link activo 🚫' });
+        }
+
       }
     }
   });
