@@ -3,7 +3,7 @@ import fs from 'fs';
 import { Boom } from '@hapi/boom';
 import NodeCache from '@cacheable/node-cache';
 import readline from 'readline';
-import makeWASocket, { DisconnectReason, delay, fetchLatestBaileysVersion, useMultiFileAuthState, makeCacheableSignalKeyStore } from '@adiwajshing/baileys';
+import makeWASocket, { DisconnectReason, delay, fetchLatestBaileysVersion, useMultiFileAuthState, makeCacheableSignalKeyStore } from '@whiskeysockets/baileys';
 import P from 'pino';
 import axios from 'axios';
 import yts from 'yt-search';
