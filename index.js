@@ -1,16 +1,14 @@
 import express from 'express';
 import fs from 'fs';
-import { Boom } from '@hapi/boom';
 import NodeCache from '@cacheable/node-cache';
 import readline from 'readline';
-import makeWASocket, { DisconnectReason, delay, fetchLatestBaileysVersion, useMultiFileAuthState, makeCacheableSignalKeyStore } from '@whiskeysockets/baileys';
+import makeWASocket, { DisconnectReason, fetchLatestBaileysVersion, useMultiFileAuthState, makeCacheableSignalKeyStore } from '@whiskeysockets/baileys';
 import P from 'pino';
-import axios from 'axios';
 import yts from 'yt-search';
 import ytdl from 'ytdl-core';
 import * as Jimp from 'jimp';
+import QRCode from 'qrcode';
 import fsExtra from 'fs-extra';
-import QRCode from 'qrcode'; // <-- NUEVO
 
 // --- EXPRESS SERVER ---
 const app = express();
@@ -42,7 +40,7 @@ app.get("/qr", (req, res) => {
 
 // --- START BOT FULL ---
 async function startSock() {
-  const { state, saveCreds } = await useMultiFileAuthState('baileys_auth_info');
+  const { state, saveCreds } = await useMultiFileAuthState('session');
   const { version, isLatest } = await fetchLatestBaileysVersion();
   console.log(`Using WA v${version.join('.')}, isLatest: ${isLatest}`);
 
@@ -69,8 +67,12 @@ async function startSock() {
       }
 
       if(connection === 'close') {
-        if((lastDisconnect?.error?.output?.statusCode) !== DisconnectReason.loggedOut) startSock();
-        else console.log('Connection closed. You are logged out.');
+        if((lastDisconnect?.error?.output?.statusCode) !== DisconnectReason.loggedOut) {
+          console.log('Reconectando...');
+          startSock();
+        } else {
+          console.log('Connection closed. You are logged out.');
+        }
       }
     }
 
@@ -87,10 +89,14 @@ async function startSock() {
           if(text.startsWith('#sticker')){
             try {
               const mediaUrl = text.split(' ')[1];
+              if(!mediaUrl) return await sock.sendMessage(from, { text: 'Debes enviar una URL de imagen.' });
               const image = await Jimp.read(mediaUrl);
               const buffer = await image.getBufferAsync(Jimp.MIME_PNG);
               await sock.sendMessage(from, { sticker: buffer });
-            } catch(e){ console.log('Error sticker:', e); }
+            } catch(e){ 
+              console.log('Error sticker:', e); 
+              await sock.sendMessage(from, { text: 'Error al crear sticker.' });
+            }
           }
 
           if(text.startsWith('#ytaudio')){
@@ -98,17 +104,25 @@ async function startSock() {
               const query = text.replace('#ytaudio','').trim();
               const r = await yts(query);
               const video = r.videos.length > 0 ? r.videos[0] : null;
-              if(video){
-                const stream = ytdl(video.url, { filter: 'audioonly' });
-                const filePath = `audio.mp3`;
-                const writeStream = fs.createWriteStream(filePath);
-                stream.pipe(writeStream);
-                writeStream.on('finish', async ()=>{
+              if(!video) return await sock.sendMessage(from, { text: 'No se encontró el audio 😔' });
+
+              const filePath = `audio.mp3`;
+              const stream = ytdl(video.url, { filter: 'audioonly' });
+              const writeStream = fs.createWriteStream(filePath);
+              stream.pipe(writeStream);
+              writeStream.on('finish', async ()=>{
+                try {
                   await sock.sendMessage(from, { audio: fs.readFileSync(filePath), mimetype: 'audio/mpeg' });
-                  fs.unlinkSync(filePath);
-                });
-              }
-            } catch(e){ console.log('Error ytaudio:', e); }
+                } catch(err){
+                  console.log('Error enviando audio:', err);
+                } finally {
+                  fsExtra.removeSync(filePath);
+                }
+              });
+            } catch(e){ 
+              console.log('Error ytaudio:', e);
+              await sock.sendMessage(from, { text: 'Ocurrió un error descargando el audio 😔' });
+            }
           }
 
           if(text.startsWith('#ytvideo')){
@@ -116,10 +130,12 @@ async function startSock() {
               const query = text.replace('#ytvideo','').trim();
               const r = await yts(query);
               const video = r.videos.length > 0 ? r.videos[0] : null;
-              if(video){
-                await sock.sendMessage(from, { text: `Video link: ${video.url}` });
-              }
-            } catch(e){ console.log('Error ytvideo:', e); }
+              if(!video) return await sock.sendMessage(from, { text: 'No se encontró video 😔' });
+              await sock.sendMessage(from, { text: `Video link: ${video.url}` });
+            } catch(e){ 
+              console.log('Error ytvideo:', e);
+              await sock.sendMessage(from, { text: 'Ocurrió un error buscando video 😔' });
+            }
           }
 
           if(text.includes('hola')){
