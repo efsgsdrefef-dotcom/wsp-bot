@@ -10,6 +10,7 @@ import yts from 'yt-search';
 import ytdl from 'ytdl-core';
 import * as Jimp from 'jimp';
 import fsExtra from 'fs-extra';
+import QRCode from 'qrcode'; // <-- NUEVO
 
 // --- EXPRESS SERVER ---
 const app = express();
@@ -26,6 +27,18 @@ const question = (text) => new Promise(resolve => rl.question(text, resolve));
 
 // --- Cache para mensajes ---
 const msgRetryCounterCache = new NodeCache();
+
+// --- VARIABLE PARA QR ---
+let latestQR = null;
+
+// --- ENDPOINT PARA VER EL QR ---
+app.get("/qr", (req, res) => {
+  if(latestQR){
+    res.send(`<img src="${latestQR}" alt="QR para WhatsApp">`);
+  } else {
+    res.send('QR aún no generado. Reinicia el bot si es necesario.');
+  }
+});
 
 // --- START BOT FULL ---
 async function startSock() {
@@ -47,12 +60,18 @@ async function startSock() {
 
   sock.ev.process(async (events) => {
     if(events['connection.update']) {
-      const { connection, lastDisconnect } = events['connection.update'];
+      const { connection, lastDisconnect, qr } = events['connection.update'];
+
+      // --- NUEVO: GUARDAR QR ---
+      if(qr){
+        latestQR = await QRCode.toDataURL(qr);
+        console.log('QR generado! Abre /qr en tu navegador para escanearlo.');
+      }
+
       if(connection === 'close') {
         if((lastDisconnect?.error?.output?.statusCode) !== DisconnectReason.loggedOut) startSock();
         else console.log('Connection closed. You are logged out.');
       }
-      if(events['connection.update'].qr) console.log('SCAN QR 🔥🔥');
     }
 
     if(events['creds.update']) await saveCreds();
@@ -66,7 +85,6 @@ async function startSock() {
 
           // --- COMANDOS ---
           if(text.startsWith('#sticker')){
-            // sticker de imagen
             try {
               const mediaUrl = text.split(' ')[1];
               const image = await Jimp.read(mediaUrl);
