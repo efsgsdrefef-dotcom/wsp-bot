@@ -4,7 +4,9 @@
   "type": "module",
   "main": "index.js",
   "scripts": {
-    "start": "node index.js"
+    "start": "node index.js",
+    "start:prod": "node index.js",
+    "dev": "nodemon index.js"
   },
   "dependencies": {
     "@whiskeysockets/baileys": "^7.0.0-rc.6",
@@ -16,6 +18,7 @@
     "ytdl-core": "^4.11.1",
     "jimp": "^1.6.0",
     "fs-extra": "^11.1.1",
-    "qrcode": "^1.5.1"
+    "qrcode": "^1.5.1",
+    "nodemon": "^3.0.3"
   }
 }
