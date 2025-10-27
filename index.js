@@ -8,7 +8,7 @@ import P from 'pino';
 import axios from 'axios';
 import yts from 'yt-search';
 import ytdl from 'ytdl-core';
-import Jimp from 'jimp';
+import * as Jimp from 'jimp';
 import fsExtra from 'fs-extra';
 
 // --- EXPRESS SERVER ---
