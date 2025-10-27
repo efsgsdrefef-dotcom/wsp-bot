@@ -18,15 +18,7 @@ const PORT = process.env.PORT || 3000;
 app.listen(PORT, () => console.log(`HTTP Server Running ✔ PORT:${PORT}`));
 
 // --- LOGGER ---
-const logger = P({
-  level: "trace",
-  transport: {
-    targets: [
-      { target: "pino-pretty", options: { colorize: true, level: "trace" } },
-      { target: "pino/file", options: { destination: './wa-logs.txt', level: "trace" } }
-    ]
-  }
-});
+const logger = P({ level: 'trace' });
 
 // --- Readline ---
 const rl = readline.createInterface({ input: process.stdin, output: process.stdout });
