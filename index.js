@@ -100,30 +100,49 @@ async function startSock() {
           }
 
           if(text.startsWith('#ytaudio')){
-            try {
-              const query = text.replace('#ytaudio','').trim();
-              const r = await yts(query);
-              const video = r.videos.length > 0 ? r.videos[0] : null;
-              if(!video) return await sock.sendMessage(from, { text: 'No se encontró el audio 😔' });
+  try {
+    const query = text.replace('#ytaudio','').trim();
+    const r = await yts(query);
+    const video = r.videos.length > 0 ? r.videos[0] : null;
+    if(!video) return await sock.sendMessage(from, { text: 'No se encontró audio 😔' });
 
-              const filePath = `audio.mp3`;
-              const stream = ytdl(video.url, { filter: 'audioonly' });
-              const writeStream = fs.createWriteStream(filePath);
-              stream.pipe(writeStream);
-              writeStream.on('finish', async ()=>{
-                try {
-                  await sock.sendMessage(from, { audio: fs.readFileSync(filePath), mimetype: 'audio/mpeg' });
-                } catch(err){
-                  console.log('Error enviando audio:', err);
-                } finally {
-                  fsExtra.removeSync(filePath);
-                }
-              });
-            } catch(e){ 
-              console.log('Error ytaudio:', e);
-              await sock.sendMessage(from, { text: 'Ocurrió un error descargando el audio 😔' });
-            }
-          }
+    const filePath = `audio.mp3`;
+    const stream = ytdl(video.url, { filter: 'audioonly', highWaterMark: 1<<25 }); // buffer grande para no saturar
+    const writeStream = fs.createWriteStream(filePath);
+
+    // Manejo de errores en stream
+    stream.on('error', async (err) => {
+      console.log('Error en ytdl stream:', err);
+      await sock.sendMessage(from, { text: 'Error descargando el audio 😔' });
+      if(fs.existsSync(filePath)) fsExtra.removeSync(filePath);
+    });
+
+    // Timeout: si tarda más de 60s, cancelar
+    const timeout = setTimeout(() => {
+      stream.destroy();
+      if(fs.existsSync(filePath)) fsExtra.removeSync(filePath);
+      sock.sendMessage(from, { text: 'La descarga tardó demasiado y fue cancelada ⏱️' });
+    }, 60000);
+
+    stream.pipe(writeStream);
+    writeStream.on('finish', async ()=>{
+      clearTimeout(timeout);
+      try {
+        await sock.sendMessage(from, { audio: fs.readFileSync(filePath), mimetype: 'audio/mpeg' });
+      } catch(err){
+        console.log('Error enviando audio:', err);
+        await sock.sendMessage(from, { text: 'Error enviando audio 😔' });
+      } finally {
+        fsExtra.removeSync(filePath);
+      }
+    });
+
+  } catch(e){ 
+    console.log('Error #ytaudio:', e);
+    await sock.sendMessage(from, { text: 'Ocurrió un error descargando el audio 😔' });
+  }
+}
+
 
           if(text.startsWith('#ytvideo')){
             try {
